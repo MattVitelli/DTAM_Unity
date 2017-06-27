@@ -1,0 +1,43 @@
+﻿#pragma kernel CSMain
+
+RWTexture2D<float4> CostVolume;
+RWTexture2D<float4> ResultQ;
+RWTexture2D<float4> ResultD;
+RWTexture2D<float4> ResultA;
+
+uniform float _invDepthMax;
+uniform float _invDepthMin;
+
+uniform int _texWidth; //texture width of cost volume
+uniform int _texHeight; //texture height of cost volume
+
+uniform int _width; //width of image
+uniform int _height; //height of image
+uniform int _depth; //number of samples in inverse depth space
+
+[numthreads(8,8,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+	uint stride = id.x + id.y * _width;
+	uint2 coord = uint2(stride % _texWidth, stride / _texWidth);
+
+	//initialize the search with the first depth element in the cost volume
+	float a_n = lerp(_invDepthMax, _invDepthMin, (float)0 / (float)(_depth - 1));
+	float bestResidual = CostVolume[coord].x;
+
+	//point-wise search (aka for loop over the inverse depths and compute residuals)
+	for (uint a_idx = 0; a_idx < _depth; a_idx++, stride += _width*_height)
+	{
+		coord = uint2(stride % _texWidth, stride / _texWidth);
+		float a_val = lerp(_invDepthMax, _invDepthMin, (float)a_idx / (float)(_depth - 1));
+		float residual = CostVolume[coord].x;
+		if (residual <= bestResidual)
+		{
+			bestResidual = residual;
+			a_n = a_val;
+		}
+	}
+	ResultD[id.xy] = a_n;
+	ResultA[id.xy] = a_n;
+	ResultQ[id.xy] = 0;
+}

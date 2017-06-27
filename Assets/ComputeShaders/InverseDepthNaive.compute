@@ -1,0 +1,35 @@
+﻿#pragma kernel CSMain
+
+RWTexture2D<float4> CostVolume;
+RWTexture2D<float4> Result;
+
+uniform float _invDepthMax;
+uniform float _invDepthMin;
+
+uniform int _texWidth; //texture width of cost volume
+uniform int _texHeight; //texture height of cost volume
+
+uniform int _width; //width of image
+uniform int _height; //height of image
+uniform int _depth; //number of samples in inverse depth space
+
+[numthreads(8,8,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+	uint stride = id.x + id.y * _width;
+	uint2 coord = uint2(stride % _texWidth, stride / _texWidth);
+	float bestVal = CostVolume[coord].r;
+	uint bestDepthIdx = 0;
+	for (uint depth_idx = 0; depth_idx < _depth; depth_idx++, stride += _width*_height)
+	{
+		uint2 newCoord = uint2(stride % _texWidth, stride / _texWidth);
+		float4 val = CostVolume[newCoord];
+		if (val.r < bestVal)
+		{
+			bestVal = val.r;
+			bestDepthIdx = depth_idx;
+		}
+	}
+	float bestInvDepth = lerp(_invDepthMax, _invDepthMin, (float)bestDepthIdx / (float)(_depth - 1));
+	Result[id.xy] = bestInvDepth;
+}

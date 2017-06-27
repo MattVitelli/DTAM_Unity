@@ -1,0 +1,38 @@
+﻿#pragma kernel CSMain
+
+RWTexture2D<float4> Intensity;
+RWTexture2D<float4> Result;
+uniform int _width;
+uniform int _height;
+uniform float _alpha;
+uniform float _beta;
+
+[numthreads(8,8,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+	float2 grad = 0;
+	uint2 id0_x = id.xy;
+	uint2 id0_y = id.xy;
+	uint2 id1_x = id.xy;
+	uint2 id1_y = id.xy;
+	if (id.x > 0)
+	{
+		id0_x = id.xy - uint2(1,0);
+	}
+	if (id.x < _width - 1)
+	{
+		id1_x = id.xy + uint2(1, 0);
+	}
+	if (id.y > 0)
+	{
+		id0_y = id.xy - uint2(0, 1);
+	}
+	if (id.y < _height - 1)
+	{
+		id1_y = id.xy + uint2(0, 1);
+	}
+	float4 deltaX = (Intensity[id1_x] - Intensity[id0_x]) / (float)(id1_x.x - id0_x.x);
+	float4 deltaY = (Intensity[id1_y] - Intensity[id0_y]) / (float)(id1_y.y - id0_y.y);
+	float gradSquared = dot(deltaX.rgb, deltaX.rgb) + dot(deltaY.rgb, deltaY.rgb);
+	Result[id.xy] = exp(-_alpha * pow(gradSquared,1.0/_beta));
+}

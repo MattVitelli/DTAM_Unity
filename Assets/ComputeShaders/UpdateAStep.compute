@@ -1,0 +1,83 @@
+﻿#pragma kernel CSMain
+
+RWTexture2D<float4> CostVolume;
+RWTexture2D<float4> CostVolumeMinMax;
+RWTexture2D<float4> ResultD;
+RWTexture2D<float4> ResultA;
+
+uniform float _theta_n;
+uniform float _lambda;
+
+uniform float _invDepthMax;
+uniform float _invDepthMin;
+
+uniform int _texWidth; //texture width of cost volume
+uniform int _texHeight; //texture height of cost volume
+
+uniform int _width; //width of image
+uniform int _height; //height of image
+uniform int _depth; //number of samples in inverse depth space
+
+float get_residual(float d_n, float a_val, float invTheta, uint baseStride, uint zStride)
+{
+	float depth_idx = clamp(((a_val - _invDepthMax) / (_invDepthMin - _invDepthMax))*(float)(_depth - 1), 0, _depth-1);
+	uint d_low = (uint)floor(depth_idx);
+	uint d_high = (uint)ceil(depth_idx);
+
+	uint stride_low = baseStride + zStride * d_low;
+	uint stride_high = baseStride + zStride * d_high;
+	
+	float lerpFactor = depth_idx - (float)d_low;
+	float cost_low = CostVolume[uint2(stride_low % _texWidth, stride_low / _texWidth)].x;
+	float cost_high = CostVolume[uint2(stride_high % _texWidth, stride_high / _texWidth)].x;
+	float cost = lerp(cost_low, cost_high, lerpFactor);
+
+	float residual = invTheta * (d_n - a_val)*(d_n - a_val) + _lambda * cost;
+	return residual;
+}
+
+float get_residual_grad(float d_n, float a_val, float invTheta, uint baseStride, uint zStride, float eps)
+{
+	return (get_residual(d_n, a_val + eps * 0.5, invTheta, baseStride, zStride) - get_residual(d_n, a_val - eps * 0.5, invTheta, baseStride, zStride)) / eps;
+}
+
+float get_residual_second_order(float d_n, float a_val, float invTheta, uint baseStride, uint zStride, float eps)
+{
+	return (get_residual(d_n, a_val + eps, invTheta, baseStride, zStride) + get_residual(d_n, a_val - eps, invTheta, baseStride, zStride) - 2 * get_residual(d_n, a_val, invTheta, baseStride, zStride)) / (eps*eps);
+}
+
+[numthreads(8,8,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+	uint baseStride = id.x + id.y * _width;
+	uint zStride = _width*_height;
+
+	float invTheta = 0.5 / _theta_n;//the (1.0/(2*theta)) term
+	float d_n = ResultD[id.xy];
+
+	//initialize the search with the first depth element in the cost volume
+	float a_n_plus_1 = lerp(_invDepthMax, _invDepthMin, (float)0 / (float)(_depth - 1));
+	float bestResidual = get_residual(d_n, a_n_plus_1, invTheta, baseStride, zStride);
+
+	float d_extent = 2.0 * _theta_n * (CostVolumeMinMax[id.xy].y - CostVolumeMinMax[id.xy].x);
+	//point-wise search (aka for loop over the inverse depths and compute residuals)
+	for(float a_idx = 0; a_idx < _depth; a_idx += 1)
+	{
+		float a_val = lerp(d_n - d_extent, d_n + d_extent, (float)a_idx / (float)(_depth - 1));
+		float residual = get_residual(d_n, a_val, invTheta, baseStride, zStride);
+		if (residual < bestResidual)
+		{
+			bestResidual = residual;
+			a_n_plus_1 = a_val;
+		}
+	}
+
+	float eps = 1.0e-6*d_extent;
+	float denom = get_residual_second_order(d_n, a_n_plus_1, invTheta, baseStride, zStride, eps);
+	if (abs(denom) > 1.0e-9)
+	{
+		float newtonStep = get_residual_grad(d_n, a_n_plus_1, invTheta, baseStride, zStride, eps) / denom;
+		a_n_plus_1 -= newtonStep;
+	}
+	ResultA[id.xy] = a_n_plus_1;
+}

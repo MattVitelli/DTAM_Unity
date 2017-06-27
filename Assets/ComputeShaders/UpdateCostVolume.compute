@@ -1,0 +1,75 @@
+﻿#pragma kernel CSMain
+
+RWTexture2D<float4> KeyframeImg;
+RWTexture2D<float4> SampleImg;
+RWTexture2D<float4> Result;
+
+uniform float _invDepthMax;
+uniform float _invDepthMin;
+
+uniform int _texWidth; //texture width of cost volume
+uniform int _texHeight; //texture height of cost volume
+
+uniform int _width; //width of image
+uniform int _height; //height of image
+uniform int _depth; //number of samples in inverse depth space
+
+uniform float4 _intrinsics;
+uniform float4 _invIntrinsics;
+uniform float4 _keyframeToSampleR0;
+uniform float4 _keyframeToSampleR1;
+uniform float4 _keyframeToSampleR2;
+
+float4 bilinearSample(float2 pt)
+{
+	uint2 pt00 = uint2(floor(pt.x), floor(pt.y));
+	uint2 pt01 = uint2(floor(pt.x), ceil(pt.y));
+	uint2 pt10 = uint2(ceil(pt.x), floor(pt.y));
+	uint2 pt11 = uint2(ceil(pt.x), ceil(pt.y));
+	float wX = pt.x - (float)pt00.x;
+	float wY = pt.y - (float)pt00.y;
+
+	return lerp(lerp(SampleImg[pt00], SampleImg[pt10], wX), lerp(SampleImg[pt01], SampleImg[pt11], wX), wY);
+}
+
+[numthreads(8,8,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+	uint texIdx = id.x + id.y * _texWidth;
+	uint3 cellIdx = uint3(texIdx % _width, (texIdx / _width) % _height, (texIdx / (_width * _height)));
+	float3 invRecip = 1.0 / float3(_width - 1, _height - 1, _depth - 1);
+	float3 cellIdxNormalized = float3(cellIdx)* invRecip;
+
+	if (texIdx > _width*_height*_depth)
+	{
+		Result[id.xy] = 0;
+	}
+	else
+	{
+		float3 pointInKeyframe = float3((float2)cellIdx.xy * _invIntrinsics.xy + _invIntrinsics.zw, 1);
+		pointInKeyframe /= lerp(_invDepthMax, _invDepthMin, cellIdxNormalized.z);
+		float4 pointInKeyframeH = float4(pointInKeyframe, 1.0);
+		float4 pointInSample = float4(dot(_keyframeToSampleR0, pointInKeyframeH),
+									dot(_keyframeToSampleR1, pointInKeyframeH),
+									dot(_keyframeToSampleR2, pointInKeyframeH),
+									1.0);
+		float3 pointInSampleImage = float3(pointInSample.xy * _intrinsics.xy + pointInSample.z * _intrinsics.zw, pointInSample.z);
+		pointInSampleImage.xy /= pointInSampleImage.z;
+		if ((pointInSampleImage.x >= 0
+			&& pointInSampleImage.x <= _width - 1
+			&& pointInSampleImage.y >= 0
+			&& pointInSampleImage.y <= _height - 1) && pointInSample.z > 0)
+		{
+			float3 samp = bilinearSample(pointInSampleImage).rgb; //bilinear
+			//float3 samp = SampleImg[uint2(floor(pointInSampleImage.x), floor(pointInSampleImage.y))].rgb; //nearest
+			float3 residual = KeyframeImg[cellIdx.xy].rgb - samp;
+			float oldR = Result[id.xy].x;
+			float oldN = Result[id.xy].y;
+			float newN = oldN + 1;
+			float4 residuals = 0;
+			residuals.r = oldR + (dot(abs(residual), 1) - oldR) / newN;
+			residuals.g = newN;
+			Result[id.xy] = residuals;
+		}
+	}
+}

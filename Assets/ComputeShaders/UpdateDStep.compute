@@ -1,0 +1,59 @@
+﻿#pragma kernel CSMain
+
+RWTexture2D<float4> Regularizer;
+RWTexture2D<float4> ResultQ;
+RWTexture2D<float4> ResultD;
+RWTexture2D<float4> ResultA;
+
+uniform float _sigma_d;
+uniform float _theta_n;
+uniform int _width;
+uniform int _height;
+
+[numthreads(8,8,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+	uint2 id0_x = id.xy;
+	uint2 id0_y = id.xy;
+	uint2 id1_x = id.xy;
+	uint2 id1_y = id.xy;
+	if (id.x > 0)
+	{
+		id0_x = id.xy - uint2(1, 0);
+	}
+	if (id.x < _width - 1)
+	{
+		id1_x = id.xy + uint2(1, 0);
+	}
+	if (id.y > 0)
+	{
+		id0_y = id.xy - uint2(0, 1);
+	}
+	if (id.y < _height - 1)
+	{
+		id1_y = id.xy + uint2(0, 1);
+	}
+
+	float w0_x = (id0_x.x > 0) ? 0.5 : 1;
+	w0_x *= (id0_x.x == id.x) ? -1 : 1;
+
+	float w1_x = (id1_x.x < _width - 1) ? 0.5 : 1;
+	w1_x *= (id1_x.x == id.x) ? 1 : -1;
+
+	float w0_y = (id0_y.y > 0) ? 0.5 : 1;
+	w0_y *= (id0_y.y == id.y) ? -1 : 1;
+
+	float w1_y = (id1_y.y < _height - 1) ? 0.5 : 1;
+	w1_y *= (id1_y.x == id.y) ? 1 : -1;
+
+	float g = Regularizer[id.xy];
+	//float Atq_n_plus_1 = (ResultQ[id0_x].x*w0_x + ResultQ[id1_x].x*w1_x + ResultQ[id0_y].y*w0_y + ResultQ[id1_y].y*w1_y);
+	float Atq_n_plus_1 = (ResultQ[id1_x].x - ResultQ[id0_x].x) / (float)(id1_x.x - id0_x.x) + (ResultQ[id1_y].y - ResultQ[id0_y].y) / (float)(id1_y.y - id0_y.y);// -ResultQ[id.xy].y;// (ResultQ[id1_x]x - ResultQ[id0_x].x) / ()
+	//float GAtq_n_plus_1 = Atq_n_plus_1; //computes the GAtq_n_plus_1 term
+	float GAtq_n_plus_1 = g * Atq_n_plus_1; //computes the GAtq_n_plus_1 term
+
+	float d_n = ResultD[id.xy].r;
+	float a_n = ResultA[id.xy].r;
+	float d_n_plus_1 = (d_n + _sigma_d * (GAtq_n_plus_1 + a_n / _theta_n)) / (1.0 + _sigma_d / _theta_n);
+	ResultD[id.xy] = d_n_plus_1;
+}

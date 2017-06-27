@@ -1,0 +1,51 @@
+﻿#pragma kernel CSMain
+
+RWTexture2D<float4> Regularizer;
+RWTexture2D<float4> ResultQ;
+RWTexture2D<float4> ResultD;
+
+uniform float _epsilon;
+uniform float _sigma_q;
+uniform int _width;
+uniform int _height;
+
+[numthreads(8,8,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+	uint2 id0_x = id.xy;
+	uint2 id0_y = id.xy;
+	uint2 id1_x = id.xy;
+	uint2 id1_y = id.xy;
+	if (id.x > 0)
+	{
+		id0_x = id.xy - uint2(1, 0);
+	}
+	if (id.x < _width - 1)
+	{
+		id1_x = id.xy + uint2(1, 0);
+	}
+	if (id.y > 0)
+	{
+		id0_y = id.xy - uint2(0, 1);
+	}
+	if (id.y < _height - 1)
+	{
+		id1_y = id.xy + uint2(0, 1);
+	}
+		
+	float dDdX = (ResultD[id1_x].x*Regularizer[id1_x].x - ResultD[id0_x].x*Regularizer[id0_x].x) / (float)(id1_x.x - id0_x.x);
+	float dDdY = (ResultD[id1_y].x*Regularizer[id1_y].x - ResultD[id0_y].x*Regularizer[id0_y].x) / (float)(id1_y.y - id0_y.y);
+	float2 AGd = float2(dDdX, dDdY);
+
+	//float g = Regularizer[id.xy];
+	//float dDdX = (ResultD[id1_x].x - ResultD[id0_x].x) / (float)(id1_x.x - id0_x.x);
+	//float dDdY = (ResultD[id1_y].x - ResultD[id0_y].x) / (float)(id1_y.y - id0_y.y);
+	//float2 AGd = g * float2(dDdX, dDdY);
+
+	float2 q_n = ResultQ[id.xy];
+	float2 q_n_plus_1 = (q_n + _sigma_q * AGd) / (1.0 + _sigma_q *_epsilon);
+	//project q_n_plus_1 to enforce the constraint ||q_n_plus_1|| <= 1
+	q_n_plus_1 /= max(1.0, sqrt(dot(q_n_plus_1, q_n_plus_1)));
+
+	ResultQ[id.xy] = float4(q_n_plus_1, dot(q_n_plus_1, q_n_plus_1), 0);
+}
